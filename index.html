@@ -183,6 +183,14 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
 .actions .btn { width: 100%; }
 #plain { display: block; }
 #plain[hidden] { display: none; }
+.ocr { gap: 8px; }
+.pic-prev { display: flex; align-items: center; gap: 12px; }
+.pic-prev img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+.thumb { grid-column: 1; width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); margin-top: 4px; }
+.paper .ph { display: block; margin-top: 6px; width: 170px; max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--paper-line); border-radius: 4px; background: #fff; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { min-height: 44px; max-width: 100%; border: 1px solid var(--line); background: var(--field); color: var(--fg); border-radius: 10px; padding: 6px 12px; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.chip.on { border-color: var(--accent); outline: 2px solid var(--accent); }
 @media print {
   @page { size: A4; margin: 16mm; }
   html, body { background: #fff !important; }
@@ -192,6 +200,8 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
   .paper { box-shadow: none; border-radius: 0; padding: 0; background: #fff; color: #000; font-size: 12pt; }
   .paper h2 { font-size: 20pt; }
   .paper .rule { background: #000; }
+  .paper li { break-inside: avoid; }
+  .paper .ph { width: 55mm; max-height: 70mm; }
 }
 @media (prefers-reduced-motion: no-preference) { .btn { transition: opacity .15s; } }
 </style>
@@ -231,6 +241,20 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
     <div class="field">
       <label for="name" id="name-l">Nome del farmaco</label>
       <input type="text" id="name" autocomplete="off" placeholder="es. Ramipril 5 mg">
+    </div>
+    <div class="field ocr">
+      <input type="file" id="shot" accept="image/*" capture="environment" hidden>
+      <button class="btn alt" type="button" id="shot-btn">Leggi il nome da una foto</button>
+      <p class="msg" id="ocr-msg" role="status" aria-live="polite"></p>
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="field ocr">
+      <input type="file" id="pic" accept="image/*" hidden>
+      <button class="btn alt" type="button" id="pic-btn">Allega una foto al foglio</button>
+      <div class="pic-prev" id="pic-prev" hidden>
+        <img id="pic-img" alt="Foto allegata">
+        <button class="btn link" type="button" id="pic-del">Togli foto</button>
+      </div>
     </div>
     <div class="row-dq only-farmaco">
       <div class="field">
@@ -307,7 +331,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
     } catch (e) {}
   }
   function persist() {
-    try { localStorage.setItem(KEY, JSON.stringify({ patient: state.patient, doctor: state.doctor, items: state.items })); } catch (e) {}
+    try { localStorage.setItem(KEY, JSON.stringify({ patient: state.patient, doctor: state.doctor, items: state.items })); return true; } catch (e) { return false; }
   }
   function say(t) { $('msg').textContent = t; }
 
@@ -333,6 +357,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
       return '<li class="item">' +
         '<div class="name"><span class="tag ' + (it.kind === 'farmaco' ? 'k' : '') + '">' + (it.kind === 'farmaco' ? 'Farmaco' : 'Richiesta') + '</span>' + esc(it.name) + (it.example ? ' <span class="tag">Esempio</span>' : '') + '</div>' +
         (meta ? '<div class="meta">' + esc(meta) + '</div>' : '') +
+        (it.photo ? '<img class="thumb" alt="Foto: ' + esc(it.name) + '" src="' + esc(it.photo) + '">' : '') +
         (it.example ? '' : '<button class="btn link del" type="button" data-id="' + esc(it.id) + '" aria-label="Rimuovi ' + esc(it.name) + '">Rimuovi</button>') +
         '</li>';
     }).join('');
@@ -352,7 +377,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
       if (!arr.length) return '';
       return '<h3>' + title + '</h3><ol>' + arr.map(function (it, n) {
         var sub = metaParts(it).join(' · ');
-        return '<li><span class="box" aria-hidden="true"></span><div><strong>' + (n + 1) + '. ' + esc(it.name) + '</strong>' + (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + '</div></li>';
+        return '<li><span class="box" aria-hidden="true"></span><div><strong>' + (n + 1) + '. ' + esc(it.name) + '</strong>' + (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + (it.photo ? '<img class="ph" alt="" src="' + esc(it.photo) + '">' : '') + '</div></li>';
       }).join('') + '</ol>';
     }
     $('paper').innerHTML =
@@ -413,11 +438,15 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
       name: name,
       dose: kind === 'farmaco' ? $('dose').value.trim() : '',
       qty: kind === 'farmaco' ? (q > 0 ? q : 1) : '',
-      note: $('note').value.trim()
+      note: $('note').value.trim(),
+      photo: pendingPhoto
     });
-    persist();
+    var lost = false;
+    if (!persist() && pendingPhoto) { state.items[state.items.length - 1].photo = ''; persist(); lost = true; }
+    setPhoto('');
+    $('chips').innerHTML = ''; $('ocr-msg').textContent = '';
     $('name').value = ''; $('dose').value = ''; $('note').value = ''; $('qty').value = 1;
-    say('Aggiunto: ' + name);
+    say(lost ? 'Aggiunto senza foto: la memoria dell\u2019app sul telefono è piena.' : 'Aggiunto: ' + name);
     $('name').focus();
     render();
   });
@@ -452,6 +481,109 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
   });
 
   $('print').addEventListener('click', function () { window.print(); });
+
+  // foto e lettura del testo (sul telefono)
+  var tessLoading = null;
+  function loadTess() {
+    if (window.Tesseract) return Promise.resolve();
+    if (!tessLoading) {
+      tessLoading = new Promise(function (res, rej) {
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+        s.onload = res;
+        s.onerror = function () { tessLoading = null; rej(new Error('load')); };
+        document.head.appendChild(s);
+      });
+    }
+    return tessLoading;
+  }
+  function toCanvas(file, max) {
+    return new Promise(function (res, rej) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var sc = Math.min(1, (max || 1800) / Math.max(img.naturalWidth, img.naturalHeight));
+        var c = document.createElement('canvas');
+        c.width = Math.round(img.naturalWidth * sc);
+        c.height = Math.round(img.naturalHeight * sc);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        res(c);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); rej(new Error('img')); };
+      img.src = url;
+    });
+  }
+  function showLines(data) {
+    var seen = {}, out = [];
+    var lines = (data.lines && data.lines.length) ? data.lines
+      : String(data.text || '').split('\n').map(function (t) { return { text: t, confidence: 100, bbox: { y0: 0, y1: 0 } }; });
+    lines.forEach(function (l) {
+      var t = String(l.text || '').replace(/\s+/g, ' ').trim();
+      var letters = (t.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+      var key = t.toLowerCase();
+      if (t.length < 3 || t.length > 70 || letters < 3 || l.confidence < 45 || seen[key]) return;
+      seen[key] = 1;
+      out.push({ t: t, h: (l.bbox ? l.bbox.y1 - l.bbox.y0 : 0) });
+    });
+    out.sort(function (a, b) { return b.h - a.h; });
+    out = out.slice(0, 10);
+    var msg = $('ocr-msg');
+    if (!out.length) { msg.textContent = 'Non sono riuscito a leggere niente. Riprova con più luce e il testo a fuoco.'; return; }
+    msg.textContent = 'Tocca la riga giusta per usarla come nome, poi correggila se serve.';
+    $('chips').innerHTML = out.map(function (o) { return '<button type="button" class="chip">' + esc(o.t) + '</button>'; }).join('');
+  }
+  $('shot-btn').addEventListener('click', function () { $('shot').click(); });
+  $('shot').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    var msg = $('ocr-msg'), worker = null;
+    $('chips').innerHTML = '';
+    msg.textContent = 'Preparo la foto…';
+    toCanvas(file).then(function (canvas) {
+      msg.textContent = 'Scarico il motore di lettura (solo la prima volta)…';
+      return loadTess().then(function () {
+        return Tesseract.createWorker('ita', 1, {
+          logger: function (m) {
+            if (m.status === 'recognizing text') msg.textContent = 'Leggo il testo… ' + Math.round(m.progress * 100) + '%';
+          }
+        });
+      }).then(function (w) { worker = w; return w.recognize(canvas); });
+    }).then(function (r) {
+      var done = function () { return r; };
+      return worker.terminate().then(done, done);
+    }).then(function (r) { showLines(r.data); })
+    .catch(function () {
+      if (worker) { try { worker.terminate(); } catch (x) {} }
+      msg.textContent = 'Lettura non riuscita. Serve la connessione la prima volta: riprova, oppure scrivi il nome a mano.';
+    });
+  });
+  $('chips').addEventListener('click', function (e) {
+    var b = e.target.closest('.chip');
+    if (!b) return;
+    $('name').value = b.textContent;
+    Array.prototype.forEach.call($('chips').children, function (c) { c.classList.toggle('on', c === b); });
+  });
+
+  // foto allegata al foglio
+  var pendingPhoto = '';
+  function setPhoto(d) {
+    pendingPhoto = d || '';
+    $('pic-img').src = pendingPhoto;
+    $('pic-prev').hidden = !pendingPhoto;
+    $('pic-btn').textContent = pendingPhoto ? 'Cambia foto' : 'Allega una foto al foglio';
+  }
+  $('pic-btn').addEventListener('click', function () { $('pic').click(); });
+  $('pic').addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    toCanvas(f, 900).then(function (c) {
+      setPhoto(c.toDataURL('image/jpeg', 0.68));
+      say('Foto allegata: comparirà nel foglio quando aggiungi la voce.');
+    }, function () { say('Non riesco a leggere questa foto.'); });
+  });
+  $('pic-del').addEventListener('click', function () { setPhoto(''); say('Foto tolta.'); });
 
   // offline
   try { if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {}
